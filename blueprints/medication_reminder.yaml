@@ -1,0 +1,288 @@
+blueprint:
+  name: Medication Reminder (iOS + Android)
+  description: >
+    Actionable medication reminder with three responses (Taken / Later / Skip),
+    platform switch for iOS and Android, and direct updates to a set of helper
+    entities so a template sensor can expose a rich status for dashboards.
+
+    Based on and inspired by "Advanced medication reminder (Android)" by Aohzan:
+    https://github.com/Aohzan/hass-blueprints/blob/main/blueprints/medication_reminder_android.yaml
+  domain: automation
+  source_url: https://github.com/3DJupp/ha-medication-tracker/blob/main/blueprints/medication_reminder.yaml
+  input:
+    reminder_time:
+      name: Reminder time
+      selector:
+        time: {}
+    notify_device:
+      name: Device
+      description: Device running the Home Assistant Companion app
+      selector:
+        device:
+          integration: mobile_app
+    platform_type:
+      name: Platform
+      default: android
+      selector:
+        select:
+          options:
+            - android
+            - ios
+    tracking_boolean:
+      name: Tracking boolean
+      description: input_boolean that reflects whether the reminder is resolved
+      selector:
+        entity:
+          domain: input_boolean
+    tracking_datetime:
+      name: Timestamp helper
+      description: input_datetime updated on every user response
+      selector:
+        entity:
+          domain: input_datetime
+    tracking_select:
+      name: Action helper
+      description: "input_select with the options: none, taken, postponed, skipped"
+      selector:
+        entity:
+          domain: input_select
+    notification_title:
+      name: Notification title
+      default: "Medication"
+    notification_message:
+      name: Notification message
+      default: "Time to take your medication"
+    action_taken_label:
+      name: Button label — Taken
+      default: "Taken"
+    action_later_label:
+      name: Button label — Later
+      default: "Later"
+    action_skip_label:
+      name: Button label — Skip
+      default: "Skip"
+    snooze_minutes:
+      name: Snooze after "Later"
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 240
+          unit_of_measurement: min
+          mode: slider
+    answer_timeout:
+      name: Answer timeout
+      description: Without a response the reminder counts as unanswered and repeats
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 240
+          unit_of_measurement: min
+          mode: slider
+    max_reminders:
+      name: Maximum repetitions
+      default: 6
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: slider
+    notification_icon:
+      name: Notification icon (Android only)
+      default: "mdi:pill"
+    notification_channel:
+      name: Notification channel (Android only)
+      description: Lets you assign a dedicated sound/importance in Android settings
+      default: "Medication"
+    interruption_level:
+      name: Interruption level (iOS only)
+      default: time-sensitive
+      selector:
+        select:
+          options:
+            - passive
+            - active
+            - time-sensitive
+            - critical
+    optional_action:
+      name: Additional action
+      description: Runs alongside every notification, e.g. a speaker announcement
+      default: []
+      selector:
+        action: {}
+
+mode: restart
+
+variables:
+  platform_type: !input platform_type
+  tracking_boolean: !input tracking_boolean
+  max_reminders: !input max_reminders
+
+triggers:
+  - trigger: time
+    at: !input reminder_time
+
+actions:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: !input tracking_boolean
+  - action: input_select.select_option
+    target:
+      entity_id: !input tracking_select
+    data:
+      option: none
+
+  - alias: Remind until a response or the limit is reached
+    repeat:
+      while:
+        - condition: state
+          entity_id: !input tracking_boolean
+          state: "off"
+        - condition: template
+          value_template: "{{ repeat.index <= max_reminders }}"
+      sequence:
+        - action: logbook.log
+          data:
+            name: !input notification_title
+            message: "Reminder sent"
+            entity_id: !input tracking_boolean
+
+        - choose:
+            - conditions: "{{ true }}"
+              sequence: !input optional_action
+
+        - choose:
+            - conditions: "{{ platform_type == 'android' }}"
+              sequence:
+                - domain: mobile_app
+                  type: notify
+                  device_id: !input notify_device
+                  title: !input notification_title
+                  message: !input notification_message
+                  data:
+                    ttl: 0
+                    priority: high
+                    tag: !input tracking_boolean
+                    notification_icon: !input notification_icon
+                    channel: !input notification_channel
+                    actions:
+                      - title: !input action_taken_label
+                        action: "taken"
+                      - title: !input action_later_label
+                        action: "later"
+                      - title: !input action_skip_label
+                        action: "skip"
+          default:
+            - domain: mobile_app
+              type: notify
+              device_id: !input notify_device
+              title: !input notification_title
+              message: !input notification_message
+              data:
+                tag: !input tracking_boolean
+                push:
+                  interruption-level: !input interruption_level
+                actions:
+                  - title: !input action_taken_label
+                    action: "taken"
+                  - title: !input action_later_label
+                    action: "later"
+                  - title: !input action_skip_label
+                    action: "skip"
+
+        - wait_for_trigger:
+            - trigger: event
+              event_type: mobile_app_notification_action
+              event_data:
+                tag: !input tracking_boolean
+          timeout:
+            minutes: !input answer_timeout
+
+        - choose:
+            - conditions: "{{ wait.trigger and wait.trigger.event.data.action == 'taken' }}"
+              sequence:
+                - action: input_select.select_option
+                  target:
+                    entity_id: !input tracking_select
+                  data:
+                    option: taken
+                - action: input_datetime.set_datetime
+                  target:
+                    entity_id: !input tracking_datetime
+                  data:
+                    datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+                - action: input_boolean.turn_on
+                  target:
+                    entity_id: !input tracking_boolean
+                - action: logbook.log
+                  data:
+                    name: !input notification_title
+                    message: "Medication taken"
+                    entity_id: !input tracking_boolean
+
+            - conditions: "{{ wait.trigger and wait.trigger.event.data.action == 'later' }}"
+              sequence:
+                - action: input_select.select_option
+                  target:
+                    entity_id: !input tracking_select
+                  data:
+                    option: postponed
+                - action: input_datetime.set_datetime
+                  target:
+                    entity_id: !input tracking_datetime
+                  data:
+                    datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+                - action: logbook.log
+                  data:
+                    name: !input notification_title
+                    message: "Reminder postponed"
+                    entity_id: !input tracking_boolean
+                - delay:
+                    minutes: !input snooze_minutes
+
+            - conditions: "{{ wait.trigger and wait.trigger.event.data.action == 'skip' }}"
+              sequence:
+                - action: input_select.select_option
+                  target:
+                    entity_id: !input tracking_select
+                  data:
+                    option: skipped
+                - action: input_datetime.set_datetime
+                  target:
+                    entity_id: !input tracking_datetime
+                  data:
+                    datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+                - action: input_boolean.turn_on
+                  target:
+                    entity_id: !input tracking_boolean
+                - action: logbook.log
+                  data:
+                    name: !input notification_title
+                    message: "Reminder skipped"
+                    entity_id: !input tracking_boolean
+
+          default:
+            - domain: mobile_app
+              type: notify
+              device_id: !input notify_device
+              message: "clear_notification"
+              data:
+                tag: !input tracking_boolean
+            - action: logbook.log
+              data:
+                name: !input notification_title
+                message: "No answer, timed out"
+                entity_id: !input tracking_boolean
+
+  - alias: Give up after the limit
+    if:
+      - condition: state
+        entity_id: !input tracking_boolean
+        state: "off"
+    then:
+      - action: logbook.log
+        data:
+          name: !input notification_title
+          message: "Reminder aborted (limit reached)"
+          entity_id: !input tracking_boolean

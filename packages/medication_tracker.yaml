@@ -1,0 +1,100 @@
+# Medication tracker package
+# Helpers + template sensor for the medication reminder blueprint.
+#
+# Requires in configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# Replace `automation.medication_reminder` (two occurrences) with the
+# entity_id of YOUR blueprint automation.
+
+input_boolean:
+  medication_tracker:
+    name: Medication tracker
+    icon: mdi:pill
+
+input_datetime:
+  medication_tracker_last:
+    name: Medication last response
+    has_date: true
+    has_time: true
+
+input_select:
+  medication_tracker_action:
+    name: Medication last action
+    icon: mdi:gesture-tap
+    options:
+      - none
+      - taken
+      - postponed
+      - skipped
+    initial: none
+
+template:
+  - trigger:
+      - trigger: state
+        entity_id:
+          - input_boolean.medication_tracker
+          - input_datetime.medication_tracker_last
+          - input_select.medication_tracker_action
+      - trigger: state
+        entity_id: automation.medication_reminder
+        attribute: last_triggered
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: homeassistant
+        event: start
+    sensor:
+      - name: Medication Status
+        unique_id: medication_tracker_status
+        state: >
+          {% set b = states('input_boolean.medication_tracker') %}
+          {% set a = states('input_select.medication_tracker_action') %}
+          {% set t = states('input_datetime.medication_tracker_last') %}
+          {% set lt = state_attr('automation.medication_reminder',
+                                 'last_triggered') %}
+          {% set dt = (as_datetime(t) | as_local) if t not in
+             ['unknown','unavailable','none',''] else none %}
+          {% set today = dt is not none and dt.date() == now().date() %}
+          {% set reminded = lt is not none and
+             lt.astimezone().date() == now().date() %}
+          {% if b == 'on' and today and a in ['taken','skipped'] %} {{ a }}
+          {% elif b == 'on' %} taken
+          {% elif today and a == 'postponed'
+                and now() < dt + timedelta(minutes=45) %} postponed
+          {% elif not reminded %} pending
+          {% elif now() < lt.astimezone() + timedelta(hours=2) %} due
+          {% else %} missed {% endif %}
+        attributes:
+          last_response: "{{ states('input_datetime.medication_tracker_last') }}"
+          last_action: "{{ states('input_select.medication_tracker_action') }}"
+
+automation:
+  # Covers toggling the boolean manually in the UI (outside the notification):
+  # records it as "taken" and stamps the time. The 10 s guard prevents this
+  # from re-firing right after the blueprint already handled a response.
+  - id: medication_tracker_manual
+    alias: Medication tracker - manual toggle
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.medication_tracker
+        from: "off"
+        to: "on"
+    conditions:
+      - condition: template
+        value_template: >
+          {{ (as_timestamp(now()) -
+              as_timestamp(states('input_datetime.medication_tracker_last'), 0))
+             > 10 }}
+    actions:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.medication_tracker_action
+        data:
+          option: taken
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.medication_tracker_last
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
