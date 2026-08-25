@@ -1,0 +1,86 @@
+# Mushroom template badge for the medication status sensor.
+# Requires the Mushroom card collection (HACS).
+#
+# Replace:
+#   - YOUR_USER_ID with the Home Assistant user id
+#     (Settings -> People -> select user -> ID)
+#   - /lovelace/medication with the path of your detail view
+#
+# All icons are valid Material Design Icons:
+#   mdi:pill-multiple, mdi:pill-off, mdi:pill,
+#   mdi:clock-alert-outline, mdi:clock-outline
+
+type: custom:mushroom-template-badge
+entity: sensor.medication_status
+label: Medication
+content: |
+  {% set s = states('sensor.medication_status') %}
+  {% set t = states('input_datetime.medication_tracker_last') %}
+  {% if s in ['taken', 'skipped']
+        and t not in ['unknown', 'unavailable', 'none', ''] %}
+    {{ as_timestamp(t, 0) | timestamp_custom('%H:%M') }}
+  {% elif s == 'taken' %}
+    Done
+  {% elif s == 'skipped' %}
+    Skip
+  {% elif s == 'postponed' %}
+    Later
+  {% elif s == 'pending' %}
+    Pending
+  {% elif s == 'due' %}
+    Due
+  {% elif s == 'missed' %}
+    Missed!
+  {% else %}
+    {{ s }}
+  {% endif %}
+icon: |
+  {% set s = states('sensor.medication_status') %}
+  {% if s == 'taken' %}
+    mdi:pill-multiple
+  {% elif s == 'skipped' %}
+    mdi:pill-off
+  {% elif s == 'postponed' %}
+    mdi:clock-alert-outline
+  {% elif s == 'due' %}
+    mdi:pill
+  {% elif s == 'missed' %}
+    mdi:pill-off
+  {% else %}
+    mdi:clock-outline
+  {% endif %}
+color: |
+  {% set s = states('sensor.medication_status') %}
+  {% if s == 'taken' %}
+    green
+  {% elif s == 'skipped' %}
+    blue
+  {% elif s == 'postponed' %}
+    yellow
+  {% elif s == 'due' %}
+    orange
+  {% elif s == 'missed' %}
+    red
+  {% else %}
+    grey
+  {% endif %}
+tap_action:
+  action: navigate
+  navigation_path: /lovelace/medication
+double_tap_action:
+  action: perform-action
+  perform_action: input_boolean.turn_on
+  target:
+    entity_id: input_boolean.medication_tracker
+visibility:
+  - condition: user
+    users:
+      - YOUR_USER_ID
+  - condition: or
+    conditions:
+      - condition: state
+        entity: input_boolean.medication_tracker
+        state: "off"
+      - condition: state
+        entity: input_select.medication_tracker_action
+        state: skipped
